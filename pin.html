@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>钉住的截图</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%; height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+      img {
+        width: 100%; height: 100%;
+        display: block;
+        object-fit: fill;
+      }
+      /* 整个窗口可拖动 */
+      .drag { position: fixed; inset: 0; }
+      .hint {
+        position: fixed;
+        right: 4px; bottom: 4px;
+        padding: 2px 8px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 11px;
+        border-radius: 4px;
+        opacity: 0;
+        transition: opacity 0.15s;
+        pointer-events: none;
+        font-family: "Microsoft YaHei", sans-serif;
+      }
+      body:hover .hint { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div class="drag" data-tauri-drag-region>
+      <img id="pin-img" alt="钉住的截图" data-tauri-drag-region />
+    </div>
+    <div class="hint" data-i18n="pin.hint">拖动移动 · 双击/右键关闭</div>
+    <script type="module" src="/src/pin.ts"></script>
+  </body>
+</html>

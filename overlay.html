@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>框选截图区域</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%; height: 100%;
+        background: #000; /* 快照图加载失败时的兜底底色 */
+        overflow: hidden;
+        cursor: crosshair;
+        user-select: none;
+        -webkit-user-select: none;
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      }
+      #bg {
+        position: fixed; inset: 0;
+        width: 100%; height: 100%;
+        display: block;
+        pointer-events: none;
+      }
+      #canvas {
+        position: fixed; inset: 0;
+        pointer-events: none; /* 事件统一由 window 处理 */
+      }
+      #dim {
+        position: fixed; inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+      }
+
+      /* ===== 选区（微信绿风格） ===== */
+      #box {
+        position: fixed;
+        display: none;
+        border: 2px solid #07c160;
+        background: transparent;
+        /* 用超大阴影把选区之外压暗，选区内保持清晰 */
+        box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+      }
+      #box.selected { cursor: move; }
+      #size {
+        position: absolute;
+        left: 0; top: -30px;
+        padding: 3px 10px;
+        background: #07c160;
+        color: #fff;
+        font-size: 13px;
+        border-radius: 4px;
+        white-space: nowrap;
+      }
+      #size.below { top: auto; bottom: -30px; }
+
+      /* 八向调整手柄 */
+      .handle {
+        position: absolute;
+        width: 10px; height: 10px;
+        background: #fff;
+        border: 2px solid #07c160;
+        border-radius: 2px;
+        display: none;
+        z-index: 2;
+      }
+      #box.selected .handle { display: block; }
+      .handle[data-dir="nw"] { left: -7px; top: -7px; cursor: nwse-resize; }
+      .handle[data-dir="n"]  { left: calc(50% - 5px); top: -7px; cursor: ns-resize; }
+      .handle[data-dir="ne"] { right: -7px; top: -7px; cursor: nesw-resize; }
+      .handle[data-dir="e"]  { right: -7px; top: calc(50% - 5px); cursor: ew-resize; }
+      .handle[data-dir="se"] { right: -7px; bottom: -7px; cursor: nwse-resize; }
+      .handle[data-dir="s"]  { left: calc(50% - 5px); bottom: -7px; cursor: ns-resize; }
+      .handle[data-dir="sw"] { left: -7px; bottom: -7px; cursor: nesw-resize; }
+      .handle[data-dir="w"]  { left: -7px; top: calc(50% - 5px); cursor: ew-resize; }
+
+      /* ===== 工具条（微信截图风格：深色底 + 细线单色图标） ===== */
+      #toolbar {
+        position: fixed;
+        display: none;
+        align-items: center;
+        padding: 4px 6px;
+        background: #2b2d31;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        z-index: 10;
+        cursor: default;
+      }
+      #toolbar.show { display: flex; }
+      #toolbar button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px; height: 34px;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: #d4d4d4;
+        cursor: pointer;
+      }
+      #toolbar button svg {
+        width: 20px; height: 20px;
+        display: block;
+      }
+      #toolbar button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      #toolbar button.active { color: #07c160; }
+      #toolbar button.cancel { color: #ef4444; }
+      #toolbar button.cancel:hover { color: #ff6b6b; background: rgba(239, 68, 68, 0.12); }
+      #toolbar button.done { color: #07c160; }
+      #toolbar button.done:hover { color: #2ad47e; background: rgba(7, 193, 96, 0.12); }
+      #toolbar button:disabled { opacity: 0.3; cursor: default; }
+      #toolbar button:disabled:hover { color: #d4d4d4; background: transparent; }
+      #toolbar .sep {
+        width: 1px; height: 20px;
+        background: #45474d;
+        margin: 0 5px;
+        flex-shrink: 0;
+      }
+
+      /* 颜色条（选中画图工具时出现） */
+      #palette {
+        position: fixed;
+        display: none;
+        gap: 6px;
+        padding: 6px 10px;
+        background: #2b2d31;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        z-index: 10;
+        cursor: default;
+      }
+      #palette.show { display: flex; }
+      #palette .color {
+        width: 18px; height: 18px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        cursor: pointer;
+      }
+      #palette .color.active { border-color: #fff; }
+
+      /* 文字标注输入框 */
+      .text-input {
+        position: fixed;
+        z-index: 20;
+        padding: 2px 6px;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px dashed #fff;
+        border-radius: 3px;
+        outline: none;
+        font-size: 18px;
+        font-family: inherit;
+        min-width: 120px;
+      }
+
+      /* 取色放大镜 */
+      #mag {
+        position: fixed;
+        display: none;
+        z-index: 15;
+        pointer-events: none;
+      }
+      #mag.show { display: block; }
+      #mag-canvas {
+        width: 120px; height: 120px;
+        border: 2px solid #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        display: block;
+      }
+      #mag .crosshair {
+        position: absolute;
+        left: 50%; top: 60px;
+        width: 10px; height: 10px;
+        transform: translate(-50%, -50%);
+        border: 1.5px solid #fff;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+        pointer-events: none;
+      }
+      #mag-value {
+        margin-top: 4px;
+        padding: 3px 8px;
+        background: rgba(0, 0, 0, 0.75);
+        color: #fff;
+        font-size: 12px;
+        font-family: Consolas, monospace;
+        border-radius: 4px;
+        text-align: center;
+      }
+
+      #tip {
+        position: fixed;
+        top: 24px; left: 50%;
+        transform: translateX(-50%);
+        padding: 8px 18px;
+        background: rgba(0, 0, 0, 0.65);
+        color: #fff;
+        font-size: 14px;
+        border-radius: 999px;
+        pointer-events: none;
+        z-index: 30;
+      }
+    </style>
+  </head>
+  <body>
+    <img id="bg" alt="" />
+    <canvas id="canvas"></canvas>
+    <div id="dim"></div>
+    <div id="box">
+      <span id="size"></span>
+      <div class="handle" data-dir="nw"></div>
+      <div class="handle" data-dir="n"></div>
+      <div class="handle" data-dir="ne"></div>
+      <div class="handle" data-dir="e"></div>
+      <div class="handle" data-dir="se"></div>
+      <div class="handle" data-dir="s"></div>
+      <div class="handle" data-dir="sw"></div>
+      <div class="handle" data-dir="w"></div>
+    </div>
+    <div id="mag">
+      <canvas id="mag-canvas" width="120" height="120"></canvas>
+      <div class="crosshair"></div>
+      <div id="mag-value">#------</div>
+    </div>
+    <div id="toolbar">      <button data-tool="rect" data-i18n-title="tool.rect" title="矩形"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+      <button data-tool="ellipse" data-i18n-title="tool.ellipse" title="圆形"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.5"/></svg></button>
+      <button data-tool="arrow" data-i18n-title="tool.arrow" title="箭头"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="18" x2="18" y2="6"/><polyline points="9 6 18 6 18 15"/></svg></button>
+      <button data-tool="pen" data-i18n-title="tool.pen" title="画笔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
+      <button data-tool="mosaic" data-i18n-title="tool.mosaic" title="马赛克"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="12" y1="4" x2="12" y2="20"/><rect x="12" y="12" width="8" height="8" fill="currentColor" stroke="none"/></svg></button>
+      <button data-tool="text" data-i18n-title="tool.text" title="文字"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></button>
+      <div class="sep"></div>
+      <button data-op="undo" data-i18n-title="tool.undo" title="撤销 (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
+      <div class="sep"></div>
+      <button data-op="save" data-i18n-title="tool.save" title="保存到文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+      <button data-op="pin" data-i18n-title="tool.pin" title="钉在屏幕上"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+      <div class="sep"></div>
+      <button data-op="cancel" class="cancel" data-i18n-title="tool.cancel" title="取消 (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+      <button data-op="done" class="done" data-i18n-title="tool.done" title="完成：复制到剪贴板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12.5 10 18.5 20 6.5"/></svg></button>
+    </div>
+    <div id="palette">
+      <div class="color active" data-color="#ef4444" style="background:#ef4444" data-i18n-title="color.red" title="红"></div>
+      <div class="color" data-color="#f59e0b" style="background:#f59e0b" data-i18n-title="color.yellow" title="黄"></div>
+      <div class="color" data-color="#22c55e" style="background:#22c55e" data-i18n-title="color.green" title="绿"></div>
+      <div class="color" data-color="#3b82f6" style="background:#3b82f6" data-i18n-title="color.blue" title="蓝"></div>
+      <div class="color" data-color="#ffffff" style="background:#ffffff" data-i18n-title="color.white" title="白"></div>
+      <div class="color" data-color="#000000" style="background:#000000" data-i18n-title="color.black" title="黑"></div>
+    </div>
+    <div id="tip">按住左键拖动框选区域 · Esc 或右键取消</div>
+    <script type="module" src="/src/overlay.ts"></script>
+  </body>
+</html>
